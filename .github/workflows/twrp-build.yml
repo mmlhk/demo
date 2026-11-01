@@ -150,19 +150,37 @@ jobs:
 
       - name: Collect artifacts
         run: |
-          PROD=workspace/out/target/product/$DEVICE_NAME
+          echo "=== locate product out ==="
+          # PRODUCT_OUT may be out/target/product/<device> — find it robustly
+          PROD=$(find workspace/out/target/product -maxdepth 1 -mindepth 1 -type d | head -1)
+          echo "PROD=$PROD"
+          if [ -z "$PROD" ]; then
+            echo "ERROR: no product dir under workspace/out/target/product"
+            find workspace/out -maxdepth 4 -type d 2>/dev/null | head -20
+            exit 1
+          fi
           echo "=== product out dir ==="
-          ls -la "$PROD" 2>/dev/null || { echo "WARN: $PROD not found"; find workspace/out/target/product -maxdepth 2 -type d 2>/dev/null | head; }
+          ls -la "$PROD" | head -40
+          echo "=== all .img files under out ==="
+          find workspace/out -name "*.img" -type f 2>/dev/null | head -20
           mkdir -p artifacts
-          # recovery-as-boot: boot.img is the flashable image; recovery.img may
-          # also exist. Collect every plausible artifact, tolerate missing ones.
+          # recovery-as-boot: boot.img is the flashable image; also grab
+          # recovery.img / ramdisk-recovery.img if present.
           for f in boot.img recovery.img ramdisk-recovery.img; do
-            cp -v "$PROD/$f" artifacts/ 2>/dev/null || echo "(no $f)"
+            if [ -f "$PROD/$f" ]; then
+              cp -v "$PROD/$f" artifacts/
+            fi
           done
           # any installable zips
-          cp -v "$PROD"/*.zip artifacts/ 2>/dev/null || echo "(no zips)"
+          for z in "$PROD"/*.zip; do
+            [ -f "$z" ] && cp -v "$z" artifacts/
+          done
           echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
           date -u > artifacts/build_date.txt
+          # save a manifest so we can see what was produced even if images
+          # end up empty
+          ls -la "$PROD" > artifacts/product_out_listing.txt 2>/dev/null
+          find workspace/out -name "*.img" > artifacts/img_manifest.txt 2>/dev/null
           echo "=== artifacts dir ==="
           ls -la artifacts/
           echo "=== sha256 ==="
@@ -177,7 +195,10 @@ jobs:
       - name: Upload to Release
         uses: softprops/action-gh-release@v2
         with:
-          files: artifacts/*.img
+          files: |
+            artifacts/*.img
+            artifacts/*.zip
+            artifacts/*.txt
           name: ${{ env.DEVICE_NAME }}-twrp-${{ github.run_id }}
           tag_name: twrp-${{ github.run_id }}
           body: |
