@@ -1,34 +1,9 @@
-name: TWRP Build (K10)
+name: TWRP Build with Custom Kernel (K10)
 
 on:
   push:
     branches: [ main ]
   workflow_dispatch:
-    inputs:
-      MANIFEST_URL:
-        description: 'Manifest repo URL (https)'
-        required: true
-        default: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
-      MANIFEST_BRANCH:
-        description: 'Manifest branch'
-        required: true
-        default: 'twrp-11'
-      DEVICE_PATH:
-        description: 'Device tree path in workspace'
-        required: true
-        default: 'device/k10/k10'
-      DEVICE_NAME:
-        description: 'Device codename (product out dir)'
-        required: true
-        default: 'k10'
-      MAKEFILE_NAME:
-        description: 'Lunch target prefix'
-        required: true
-        default: 'twrp_k10'
-      BUILD_TARGET:
-        description: 'Build target: bootimage (recovery-as-boot) or recoveryimage'
-        required: true
-        default: 'bootimage'
 
 jobs:
   build:
@@ -42,13 +17,14 @@ jobs:
       DEVICE_NAME: ${{ github.event.inputs.DEVICE_NAME || 'k10' }}
       MAKEFILE_NAME: ${{ github.event.inputs.MAKEFILE_NAME || 'twrp_k10' }}
       BUILD_TARGET: ${{ github.event.inputs.BUILD_TARGET || 'bootimage' }}
+      KERNEL_REPO: ${{ github.event.inputs.KERNEL_REPO || 'https://github.com/KrutosVIP/generic_kernel_mediatek_alps' }}
+      KERNEL_BRANCH: ${{ github.event.inputs.KERNEL_BRANCH || '4.19.191_mt6765' }}
+      KERNEL_DEFCONFIG: ${{ github.event.inputs.KERNEL_DEFCONFIG || 'k65v1_64_bsp_defconfig' }}
     steps:
       - name: Display Run Parameters
         run: |
           echo "Manifest: $MANIFEST_URL $MANIFEST_BRANCH"
-          echo "Device path: $DEVICE_PATH"
-          echo "Device name: $DEVICE_NAME"
-          echo "Lunch: $MAKEFILE_NAME-eng"
+          echo "Kernel: $KERNEL_REPO $KERNEL_BRANCH ($KERNEL_DEFCONFIG)"
           echo "Target: $BUILD_TARGET"
 
       - name: Check Out
@@ -56,7 +32,6 @@ jobs:
 
       - name: Free disk space
         run: |
-          # AOSP sync needs ~35-40G free; standard runner has ~14G after preinstalls
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
                        /usr/local/.ghcup /usr/local/share/boost /usr/local/bin/aws* \
                        /opt/hostedtoolcache/CodeQL 2>/dev/null || true
@@ -72,12 +47,10 @@ jobs:
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev \
             build-essential git libxml2 lzop pngcrush squashfs-tools \
             imagemagick libbz2-dev lzma ncftp libstdc++-10-dev libncurses6 \
-            python3 tar unzip zip
-          # ensure 'python' exists for legacy AOSP R scripts
+            python3 tar unzip zip bison flex libssl-dev
           if ! command -v python >/dev/null; then
             sudo ln -sf /usr/bin/python3 /usr/local/bin/python
           fi
-          python3 --version
 
       - name: Install OpenJDK 11
         uses: actions/setup-java@v4
@@ -95,6 +68,50 @@ jobs:
           git config --global user.email "k10-twrp-ci@users.noreply.github.com"
           git config --global init.defaultBranch main
 
+      # === Phase 1: Build custom kernel ===
+      - name: Clone kernel source
+        run: |
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel_src
+          echo "kernel source: $(du -sh kernel_src | cut -f1)"
+
+      - name: Patch kernel defconfig for SELinux
+        run: |
+          DEFCFG="kernel_src/arch/arm64/configs/$KERNEL_DEFCONFIG"
+          echo "=== before patch ==="
+          grep -i "SELINUX" "$DEFCFG" || echo "(no SELinux config)"
+          # Enable CONFIG_SECURITY_SELINUX_DEVELOP=y (allows permissive mode)
+          # and CONFIG_SECURITY_SELINUX_BOOTPARAM=y (allows selinux=0 cmdline)
+          sed -i 's/# CONFIG_SECURITY_SELINUX_DEVELOP is not set/CONFIG_SECURITY_SELINUX_DEVELOP=y/' "$DEFCFG"
+          # Add BOOTPARAM if not present
+          grep -q "CONFIG_SECURITY_SELINUX_BOOTPARAM" "$DEFCFG" || \
+            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> "$DEFCFG"
+          echo "=== after patch ==="
+          grep -i "SELINUX" "$DEFCFG"
+
+      - name: Build kernel
+        run: |
+          cd kernel_src
+          export ARCH=arm64
+          # Use the GCC cross-compiler from AOSP prebuilts (we'll fetch it)
+          # For standalone build, install aarch64 gcc
+          sudo apt install -yq gcc-aarch64-linux-gnu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          # Configure
+          make $KERNEL_DEFCONFIG
+          # Build only Image.gz (not DTB — we use stock DTB)
+          make Image.gz -j$(nproc --all) 2>&1 | tail -20
+          # Verify output
+          ls -la arch/arm64/boot/Image.gz
+          cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
+        id: kernel_build
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: custom-kernel-${{ github.run_id }}
+          path: kernel_custom_Image.gz
+
+      # === Phase 2: TWRP build ===
       - name: Initialize repo workspace
         id: pwd
         run: |
@@ -105,27 +122,26 @@ jobs:
 
       - name: Repo Sync
         run: |
-          # googlesource occasionally throttles; retry with backoff
           for i in 1 2 3 4 5; do
             repo sync -c --no-clone-bundle --no-tags -j8 && break
             echo "retry $i ..."; sleep 30
           done
-          # verify sync succeeded (loop exit status would mask failure)
           test -f build/envsetup.sh
           test -d bootable/recovery
           test -d vendor/twrp
         working-directory: workspace
 
-      - name: Install device tree
+      - name: Install device tree with custom kernel
         run: |
-          # The repo root IS the device tree container (device/k10/k10)
           SRC=${GITHUB_WORKSPACE}/device/k10/k10
           test -f "$SRC/AndroidProducts.mk"
           mkdir -p workspace/device/k10
           cp -a "$SRC" workspace/device/k10/k10
-          ls -la workspace/$DEVICE_PATH/prebuilt
-          test -f workspace/$DEVICE_PATH/prebuilt/Image.gz
-          test -f workspace/$DEVICE_PATH/prebuilt/dtb.img
+          # Replace prebuilt kernel with custom-compiled one
+          cp ${GITHUB_WORKSPACE}/kernel_custom_Image.gz workspace/$DEVICE_PATH/prebuilt/Image.gz
+          echo "=== prebuilt kernel ==="
+          ls -la workspace/$DEVICE_PATH/prebuilt/
+          file workspace/$DEVICE_PATH/prebuilt/Image.gz
         working-directory: .
 
       - name: Build recovery
@@ -134,35 +150,21 @@ jobs:
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
-          # lunch MUST run in the current shell (not a pipe subshell) so its
-          # env exports (TARGET_PRODUCT etc.) survive to the make command.
-          # Redirect to log file, then make.
           lunch $MAKEFILE_NAME-eng > /tmp/lunch.log 2>&1 || { cat /tmp/lunch.log; exit 1; }
           echo "=== lunch done, TARGET_PRODUCT=$TARGET_PRODUCT ==="
           make $BUILD_TARGET -j$(nproc --all) 2>&1 | tee /tmp/build.log
         working-directory: workspace
-
-      - name: Upload build logs on failure
-        if: failure()
-        uses: actions/upload-artifact@v4
-        with:
-          name: build-logs-${{ github.run_id }}
-          path: |
-            /tmp/lunch.log
-            /tmp/build.log
-          if-no-files-found: warn
 
       - name: Collect artifacts
         id: collect
         continue-on-error: true
         run: |
           set +e
-          echo "=== locate product out ==="
           PROD=$(find workspace/out/target/product -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)
           echo "PROD=$PROD"
           mkdir -p artifacts
           if [ -z "$PROD" ]; then
-            echo "WARN: no product dir; listing what exists"
+            echo "WARN: no product dir"
             find workspace/out -maxdepth 4 -type d 2>/dev/null | head -30 > artifacts/product_out_listing.txt
             find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
             echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
@@ -174,8 +176,6 @@ jobs:
           find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
           echo "=== all .img under out ==="
           cat artifacts/img_manifest.txt
-          echo "=== product listing (head) ==="
-          head -20 artifacts/product_out_listing.txt
           for f in boot.img recovery.img ramdisk-recovery.img; do
             [ -f "$PROD/$f" ] && cp -v "$PROD/$f" artifacts/
           done
@@ -188,37 +188,26 @@ jobs:
           ls -la artifacts/
           sha256sum artifacts/*.img 2>/dev/null || echo "(no images)"
 
-      - name: Upload artifacts
-        uses: actions/upload-artifact@v4
-        with:
-          name: twrp-k10-${{ github.run_id }}
-          path: artifacts/
-
       - name: Prepare release assets
         if: always()
         run: |
-          # Ensure all release files exist and are non-empty (GitHub rejects
-          # 0-byte assets with "size must be greater than or equal to 1").
           mkdir -p release_assets
-          # build.log and lunch.log from the Build step
           for f in /tmp/build.log /tmp/lunch.log; do
-            if [ -s "$f" ]; then
-              cp "$f" release_assets/
-            else
-              echo "(no $f produced)" > "release_assets/$(basename $f)"
-            fi
+            if [ -s "$f" ]; then cp "$f" release_assets/
+            else echo "(no $f produced)" > "release_assets/$(basename $f)"; fi
           done
-          # artifacts from Collect step
           if [ -d artifacts ]; then
             for f in artifacts/*; do
               if [ -s "$f" ]; then cp "$f" release_assets/; fi
             done
           fi
-          # always have at least a summary
+          # Include custom kernel in release
+          [ -f kernel_custom_Image.gz ] && cp kernel_custom_Image.gz release_assets/
           {
             echo "Run: $GITHUB_RUN_ID"
             echo "Date: $(date -u)"
             echo "Collect outcome: ${{ steps.collect.outcome }}"
+            echo "Kernel: $KERNEL_REPO $KERNEL_BRANCH ($KERNEL_DEFCONFIG)"
             echo "--- img manifest ---"
             cat artifacts/img_manifest.txt 2>/dev/null || echo "(none)"
             echo "--- product out listing ---"
@@ -231,11 +220,11 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release_assets/*
-          name: ${{ env.DEVICE_NAME }}-twrp-${{ github.run_id }}
+          name: ${{ env.DEVICE_NAME }}-twrp-customkernel-${{ github.run_id }}
           tag_name: twrp-${{ github.run_id }}
           body: |
-            TWRP for K10 (MT6765) — source-built, recovery-as-boot
-            Manifest: ${{ env.MANIFEST_BRANCH }}
+            TWRP for K10 (MT6765) — source-built with custom kernel (SELinux DEVELOP=y)
+            Kernel: ${{ env.KERNEL_REPO }} ${{ env.KERNEL_BRANCH }}
             Target: ${{ env.BUILD_TARGET }}
             Collect result: ${{ steps.collect.outcome }}
         env:
