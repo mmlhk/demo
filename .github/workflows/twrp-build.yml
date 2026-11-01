@@ -96,11 +96,15 @@ jobs:
           sudo apt install -yq gcc-aarch64-linux-gnu
           export CROSS_COMPILE=aarch64-linux-gnu-
           # Patch GCC 13 inline incompatibility with kernel 4.19:
-          # uclamp_se_set is declared 'inline' in sched.h but defined in .c file
-          # GCC 13 requires definition visible for inline. Remove 'inline' keyword.
+          # Remove 'inline' from function declarations in headers where
+          # definition is in .c files (GCC 13 requires body visible for inline)
           sed -i '/^inline void uclamp_se_set/s/^inline //' kernel/sched/sched.h
-          grep -n "uclamp_se_set" kernel/sched/sched.h | head -2
           sed -i '/^inline void ksm_flock/s/^inline //' include/linux/keyslot-manager.h 2>/dev/null || true
+          sed -i '/^inline void blk_crypto_flock/s/^inline //' include/linux/blk-crypto.h 2>/dev/null || true
+          # Generic catch-all: find all 'inline void' at start of line in headers
+          # and remove 'inline' (only in include/ and kernel/sched/)
+          find include/ kernel/sched/ -name "*.h" -exec sed -i '/^inline /s/^inline //' {} \; 2>/dev/null || true
+          grep -n "uclamp_se_set" kernel/sched/sched.h | head -2
           # Fix missing MTK ftrace headers (referenced via relative ./xxx_ftrace.h
           # but files don't exist or are in different dirs)
           [ -f kernel/trace/mtk_ftrace.h ] && cp kernel/trace/mtk_ftrace.h include/trace/mtk_ftrace.h 2>/dev/null || echo "/* stub */" > include/trace/mtk_ftrace.h
