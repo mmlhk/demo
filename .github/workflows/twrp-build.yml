@@ -96,10 +96,11 @@ jobs:
           sudo apt install -yq gcc-aarch64-linux-gnu
           export CROSS_COMPILE=aarch64-linux-gnu-
           # Patch GCC 13 inline incompatibility with kernel 4.19:
-          sed -i 's/^inline void uclamp_se_set/static inline void uclamp_se_set/' kernel/sched/sched.h
+          # uclamp_se_set is declared 'inline' in sched.h but defined in .c file
+          # GCC 13 requires definition visible for inline. Remove 'inline' keyword.
+          sed -i '/^inline void uclamp_se_set/s/^inline //' kernel/sched/sched.h
           grep -n "uclamp_se_set" kernel/sched/sched.h | head -2
-          sed -i 's/^inline void ksm_flock/static inline void ksm_flock/' include/linux/keyslot-manager.h 2>/dev/null || true
-          # Do NOT sed Makefile (breaks $(call) syntax). Use KCFLAGS instead.
+          sed -i '/^inline void ksm_flock/s/^inline //' include/linux/keyslot-manager.h 2>/dev/null || true
           make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
           make KCFLAGS="-Wno-error" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
           ls -la arch/arm64/boot/Image.gz
