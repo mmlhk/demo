@@ -99,12 +99,9 @@ jobs:
           sed -i 's/^inline void uclamp_se_set/static inline void uclamp_se_set/' kernel/sched/sched.h
           grep -n "uclamp_se_set" kernel/sched/sched.h | head -2
           sed -i 's/^inline void ksm_flock/static inline void ksm_flock/' include/linux/keyslot-manager.h 2>/dev/null || true
-          # Remove ALL -Werror flags (both -Werror and -Werror=xxx)
-          sed -i 's/-Werror[= ][^ ]*/-Wno-error/g' Makefile
-          sed -i 's/-Werror$/-Wno-error/g' Makefile
-          sed -i 's/-Werror\b/-Wno-error/g' Makefile
+          # Do NOT sed Makefile (breaks $(call) syntax). Use KCFLAGS instead.
           make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
-          make Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
+          make KCFLAGS="-Wno-error" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
           ls -la arch/arm64/boot/Image.gz
           cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
         id: kernel_build
