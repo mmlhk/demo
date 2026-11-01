@@ -102,6 +102,13 @@ TW_INCLUDE_FBE_METADATA_DECRYPT := true
 BOARD_USES_METADATA_PARTITION := true
 BOARD_SUPPRESS_SECURE_ERASE := true
 
+# AVB — recovery-as-boot uses BOOT key path (not RECOVERY)
+BOARD_AVB_ENABLE := true
+BOARD_AVB_BOOT_KEY_PATH := external/avb/test/data/testkey_rsa2048.pem
+BOARD_AVB_BOOT_ALGORITHM := SHA256_RSA2048
+BOARD_AVB_BOOT_ROLLBACK_INDEX := 1
+BOARD_AVB_MAKE_VBMETA_IMAGE_ARGS += --flags 2
+
 # Workaround for error copying files to recovery ramdisk
 BOARD_VENDORIMAGE_FILE_SYSTEM_TYPE := ext4
 TARGET_COPY_OUT_VENDOR := vendor
