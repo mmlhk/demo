@@ -90,16 +90,13 @@ jobs:
 
       - name: Build kernel
         run: |
+          set -o pipefail
           cd kernel_src
           export ARCH=arm64
-          # Use the GCC cross-compiler from AOSP prebuilts (we'll fetch it)
-          # For standalone build, install aarch64 gcc
           sudo apt install -yq gcc-aarch64-linux-gnu
           export CROSS_COMPILE=aarch64-linux-gnu-
-          # Configure
-          make $KERNEL_DEFCONFIG
-          # Build only Image.gz (not DTB — we use stock DTB)
-          make Image.gz -j$(nproc --all) 2>&1 | tail -20
+          make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
+          make Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
           # Verify output
           ls -la arch/arm64/boot/Image.gz
           cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
@@ -192,7 +189,7 @@ jobs:
         if: always()
         run: |
           mkdir -p release_assets
-          for f in /tmp/build.log /tmp/lunch.log; do
+          for f in /tmp/build.log /tmp/lunch.log /tmp/kernel_build.log /tmp/kernel_defconfig.log; do
             if [ -s "$f" ]; then cp "$f" release_assets/
             else echo "(no $f produced)" > "release_assets/$(basename $f)"; fi
           done
