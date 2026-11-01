@@ -98,10 +98,10 @@ jobs:
           # Patch GCC 13 inline incompatibility with kernel 4.19:
           # 'inline void uclamp_se_set' needs 'static' prefix
           sed -i 's/^inline void uclamp_se_set/static inline void uclamp_se_set/' kernel/sched/sched.h
-          # Same for ksm_flock in keyslot-manager.h
           sed -i 's/^inline void ksm_flock/static inline void ksm_flock/' include/linux/keyslot-manager.h
-          # Suppress -Werror to avoid other GCC 13 warning-as-error issues
-          sed -i 's/-Werror/-Wno-error/g' Makefile
+          # Disable -Werror (but use -Wno-error not -Wno-error-xxx to avoid flag issues)
+          sed -i 's/-Werror[^= ]/-Wno-error/g' Makefile
+          sed -i 's/-Werror=/-Wno-error=/g' Makefile
           make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
           make Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
           ls -la arch/arm64/boot/Image.gz
