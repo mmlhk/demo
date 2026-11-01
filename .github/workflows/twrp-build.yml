@@ -101,9 +101,13 @@ jobs:
           sed -i '/^inline void uclamp_se_set/s/^inline //' kernel/sched/sched.h
           grep -n "uclamp_se_set" kernel/sched/sched.h | head -2
           sed -i '/^inline void ksm_flock/s/^inline //' include/linux/keyslot-manager.h 2>/dev/null || true
-          # Fix missing mtk_ftrace.h include path (referenced via relative ./mtk_ftrace.h)
-          # Create symlink in include/trace/ pointing to kernel/trace/mtk_ftrace.h
-          [ -f kernel/trace/mtk_ftrace.h ] && ln -sf ../../kernel/trace/mtk_ftrace.h include/trace/mtk_ftrace.h 2>/dev/null || true
+          # Fix missing MTK ftrace headers (referenced via relative ./xxx_ftrace.h
+          # but files don't exist or are in different dirs)
+          [ -f kernel/trace/mtk_ftrace.h ] && cp kernel/trace/mtk_ftrace.h include/trace/mtk_ftrace.h 2>/dev/null || echo "/* stub */" > include/trace/mtk_ftrace.h
+          # Create stubs for all missing MET ftrace headers
+          for h in met_ftrace_touch.h met_ftrace_gpu.h met_ftrace_mm.h met_ftrace.h; do
+            [ ! -f "include/trace/$h" ] && echo "/* stub */" > "include/trace/$h"
+          done
           make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
           # Override Werror entirely: disable CONFIG_Werror + pass -w (suppress all warnings)
           make KCFLAGS="-w" CFLAGS_KERNEL="-w" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
