@@ -93,15 +93,17 @@ jobs:
           set -o pipefail
           cd kernel_src
           export ARCH=arm64
-          sudo apt install -yq clang lld llvm
-          # Use LLVM/clang exclusively (LLVM=1 uses clang for both CC and binutils)
-          # This avoids GCC 13 always_inline incompatibility with 4.19
-          export LLVM=1
-          export CC=clang
-          # Patch: -Werror causes issues with clang on 4.19
+          sudo apt install -yq gcc-aarch64-linux-gnu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          # Patch GCC 13 inline incompatibility with kernel 4.19:
+          # 'inline void uclamp_se_set' needs 'static' prefix
+          sed -i 's/^inline void uclamp_se_set/static inline void uclamp_se_set/' kernel/sched/sched.h
+          # Same for ksm_flock in keyslot-manager.h
+          sed -i 's/^inline void ksm_flock/static inline void ksm_flock/' include/linux/keyslot-manager.h
+          # Suppress -Werror to avoid other GCC 13 warning-as-error issues
           sed -i 's/-Werror/-Wno-error/g' Makefile
           make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
-          make LLVM=1 Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
+          make Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
           ls -la arch/arm64/boot/Image.gz
           cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
         id: kernel_build
