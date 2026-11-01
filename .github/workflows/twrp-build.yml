@@ -1,4 +1,4 @@
-name: TWRP Build with Custom Kernel (K10)
+name: TWRP Build (K10) — SELinux patch
 
 on:
   push:
@@ -11,30 +11,20 @@ jobs:
     permissions:
       contents: write
     env:
-      MANIFEST_URL: ${{ github.event.inputs.MANIFEST_URL || 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp' }}
-      MANIFEST_BRANCH: ${{ github.event.inputs.MANIFEST_BRANCH || 'twrp-11' }}
-      DEVICE_PATH: ${{ github.event.inputs.DEVICE_PATH || 'device/k10/k10' }}
-      DEVICE_NAME: ${{ github.event.inputs.DEVICE_NAME || 'k10' }}
-      MAKEFILE_NAME: ${{ github.event.inputs.MAKEFILE_NAME || 'twrp_k10' }}
-      BUILD_TARGET: ${{ github.event.inputs.BUILD_TARGET || 'bootimage' }}
-      KERNEL_REPO: ${{ github.event.inputs.KERNEL_REPO || 'https://github.com/KrutosVIP/generic_kernel_mediatek_alps' }}
-      KERNEL_BRANCH: ${{ github.event.inputs.KERNEL_BRANCH || '4.19.191_mt6765' }}
-      KERNEL_DEFCONFIG: ${{ github.event.inputs.KERNEL_DEFCONFIG || 'k65v1_64_bsp_defconfig' }}
+      MANIFEST_URL: 'https://github.com/minimal-manifest-twrp/platform_manifest_twrp_aosp'
+      MANIFEST_BRANCH: 'twrp-11'
+      DEVICE_PATH: 'device/k10/k10'
+      DEVICE_NAME: 'k10'
+      MAKEFILE_NAME: 'twrp_k10'
+      BUILD_TARGET: 'bootimage'
     steps:
-      - name: Display Run Parameters
-        run: |
-          echo "Manifest: $MANIFEST_URL $MANIFEST_BRANCH"
-          echo "Kernel: $KERNEL_REPO $KERNEL_BRANCH ($KERNEL_DEFCONFIG)"
-          echo "Target: $BUILD_TARGET"
-
       - name: Check Out
         uses: actions/checkout@v4
 
       - name: Free disk space
         run: |
           sudo rm -rf /usr/local/lib/android /usr/share/dotnet /opt/ghc \
-                       /usr/local/.ghcup /usr/local/share/boost /usr/local/bin/aws* \
-                       /opt/hostedtoolcache/CodeQL 2>/dev/null || true
+                       /usr/local/.ghcup /usr/local/share/boost 2>/dev/null || true
           sudo docker image prune -af 2>/dev/null || true
           df -h /
 
@@ -47,7 +37,7 @@ jobs:
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev \
             build-essential git libxml2 lzop pngcrush squashfs-tools \
             imagemagick libbz2-dev lzma ncftp libstdc++-10-dev libncurses6 \
-            python3 tar unzip zip bison flex libssl-dev
+            python3 tar unzip zip
           if ! command -v python >/dev/null; then
             sudo ln -sf /usr/bin/python3 /usr/local/bin/python
           fi
@@ -68,70 +58,10 @@ jobs:
           git config --global user.email "k10-twrp-ci@users.noreply.github.com"
           git config --global init.defaultBranch main
 
-      # === Phase 1: Build custom kernel ===
-      - name: Clone kernel source
-        run: |
-          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel_src
-          echo "kernel source: $(du -sh kernel_src | cut -f1)"
-
-      - name: Patch kernel defconfig for SELinux
-        run: |
-          DEFCFG="kernel_src/arch/arm64/configs/$KERNEL_DEFCONFIG"
-          echo "=== before patch ==="
-          grep -i "SELINUX" "$DEFCFG" || echo "(no SELinux config)"
-          sed -i 's/# CONFIG_SECURITY_SELINUX_DEVELOP is not set/CONFIG_SECURITY_SELINUX_DEVELOP=y/' "$DEFCFG"
-          grep -q "CONFIG_SECURITY_SELINUX_BOOTPARAM" "$DEFCFG" || \
-            echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> "$DEFCFG"
-          echo "=== after patch ==="
-          grep -i "SELINUX" "$DEFCFG"
-          # Fix broken Kconfig files that break defconfig generation
-          # (goodix_berlin_driver has non-ASCII chars in Kconfig)
-          find kernel_src/drivers/input/touchscreen/mediatek -name "Kconfig" -exec sed -i 's/[^[:print:]\t]/ /g' {} \; 2>/dev/null || true
-
-      - name: Build kernel
-        run: |
-          set -o pipefail
-          cd kernel_src
-          export ARCH=arm64
-          sudo apt install -yq gcc-aarch64-linux-gnu
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          # Patch GCC 13 inline incompatibility with kernel 4.19:
-          # Remove 'inline' from function declarations in headers where
-          # definition is in .c files (GCC 13 requires body visible for inline)
-          sed -i '/^inline void uclamp_se_set/s/^inline //' kernel/sched/sched.h
-          sed -i '/^inline void ksm_flock/s/^inline //' include/linux/keyslot-manager.h 2>/dev/null || true
-          sed -i '/^inline void blk_crypto_flock/s/^inline //' include/linux/blk-crypto.h 2>/dev/null || true
-          # Generic catch-all: find all 'inline void' at start of line in headers
-          # and remove 'inline' (only in include/ and kernel/sched/)
-          find include/ kernel/sched/ -name "*.h" -exec sed -i '/^inline /s/^inline //' {} \; 2>/dev/null || true
-          grep -n "uclamp_se_set" kernel/sched/sched.h | head -2
-          # Fix missing MTK ftrace headers (referenced via relative ./xxx_ftrace.h
-          # but files don't exist or are in different dirs)
-          [ -f kernel/trace/mtk_ftrace.h ] && cp kernel/trace/mtk_ftrace.h include/trace/mtk_ftrace.h 2>/dev/null || echo "/* stub */" > include/trace/mtk_ftrace.h
-          # Create stubs for all missing MET ftrace headers
-          for h in met_ftrace_touch.h met_ftrace_gpu.h met_ftrace_mm.h met_ftrace.h; do
-            [ ! -f "include/trace/$h" ] && echo "/* stub */" > "include/trace/$h"
-          done
-          make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
-          # Override Werror entirely: disable CONFIG_Werror + pass -w (suppress all warnings)
-          make KCFLAGS="-w" CFLAGS_KERNEL="-w" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
-          ls -la arch/arm64/boot/Image.gz
-          cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
-        id: kernel_build
-
-      - name: Upload kernel artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: custom-kernel-${{ github.run_id }}
-          path: kernel_custom_Image.gz
-
-      # === Phase 2: TWRP build ===
       - name: Initialize repo workspace
-        id: pwd
         run: |
           mkdir -p workspace
           cd workspace
-          echo "workspace-folder=$(pwd)" >> $GITHUB_OUTPUT
           repo init --depth=1 -u "$MANIFEST_URL" -b "$MANIFEST_BRANCH"
 
       - name: Repo Sync
@@ -145,17 +75,57 @@ jobs:
           test -d vendor/twrp
         working-directory: workspace
 
-      - name: Install device tree with custom kernel
+      - name: Patch init to skip SELinux policy loading
+        run: |
+          # Patch system/core init/selinux.cpp: make SelinuxInitialize skip LoadPolicy
+          # This prevents ebitmap_write kernel panic on MTK 4.19 kernels where
+          # CONFIG_SECURITY_SELINUX_DEVELOP is not set (only enforcing mode).
+          SELINUX_CPP="workspace/system/core/init/selinux.cpp"
+          echo "=== before patch ==="
+          grep -n "SelinuxInitialize\|LoadPolicy" "$SELINUX_CPP" | head -10
+          python3 - <<'PYEOF'
+          f = "workspace/system/core/init/selinux.cpp"
+          d = open(f).read()
+          old = '''void SelinuxInitialize() {
+              LOG(INFO) << "Loading SELinux policy";
+              if (!LoadPolicy()) {
+                  LOG(FATAL) << "Unable to load SELinux policy";
+              }'''
+          new = '''void SelinuxInitialize() {
+              LOG(INFO) << "Loading SELinux policy";
+              // TWRP patch: skip policy loading (MTK 4.19 ebitmap_write panic workaround)
+              LOG(INFO) << "TWRP: skipping SELinux policy load (MTK 4.19 compat)";
+              return;
+              if (!LoadPolicy()) {
+                  LOG(FATAL) << "Unable to load SELinux policy";
+              }'''
+          if old in d:
+              d = d.replace(old, new)
+              open(f,'w').write(d)
+              print("PATCHED: SelinuxInitialize now skips LoadPolicy")
+          else:
+              print("WARNING: exact pattern not found, trying flexible match...")
+              import re
+              # More flexible match
+              pattern = r'(void SelinuxInitialize\(\)\s*\{\s*LOG\(INFO\) << "Loading SELinux policy";\s*)if \(!LoadPolicy\(\)\)'
+              if re.search(pattern, d):
+                  d = re.sub(pattern, r'\1return; // TWRP: skip LoadPolicy (MTK 4.19 compat)\n            if (!LoadPolicy())', d)
+                  open(f,'w').write(d)
+                  print("PATCHED (flexible match)")
+              else:
+                  print("ERROR: could not find SelinuxInitialize pattern")
+                  exit(1)
+          PYEOF
+          echo "=== after patch ==="
+          grep -n "SelinuxInitialize\|LoadPolicy\|TWRP.*skip" "$SELINUX_CPP" | head -10
+        working-directory: .
+
+      - name: Install device tree
         run: |
           SRC=${GITHUB_WORKSPACE}/device/k10/k10
-          test -f "$SRC/AndroidProducts.mk"
           mkdir -p workspace/device/k10
           cp -a "$SRC" workspace/device/k10/k10
-          # Replace prebuilt kernel with custom-compiled one
-          cp ${GITHUB_WORKSPACE}/kernel_custom_Image.gz workspace/$DEVICE_PATH/prebuilt/Image.gz
-          echo "=== prebuilt kernel ==="
           ls -la workspace/$DEVICE_PATH/prebuilt/
-          file workspace/$DEVICE_PATH/prebuilt/Image.gz
         working-directory: .
 
       - name: Build recovery
@@ -175,30 +145,21 @@ jobs:
         run: |
           set +e
           PROD=$(find workspace/out/target/product -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)
-          echo "PROD=$PROD"
           mkdir -p artifacts
           if [ -z "$PROD" ]; then
-            echo "WARN: no product dir"
             find workspace/out -maxdepth 4 -type d 2>/dev/null | head -30 > artifacts/product_out_listing.txt
             find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
             echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
-            date -u > artifacts/build_date.txt
-            ls -la artifacts/
             exit 0
           fi
           ls -la "$PROD" | head -60 > artifacts/product_out_listing.txt
           find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
-          echo "=== all .img under out ==="
           cat artifacts/img_manifest.txt
           for f in boot.img recovery.img ramdisk-recovery.img; do
             [ -f "$PROD/$f" ] && cp -v "$PROD/$f" artifacts/
           done
-          for z in "$PROD"/*.zip; do
-            [ -f "$z" ] && cp -v "$z" artifacts/
-          done
           echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
           date -u > artifacts/build_date.txt
-          echo "=== artifacts dir ==="
           ls -la artifacts/
           sha256sum artifacts/*.img 2>/dev/null || echo "(no images)"
 
@@ -206,27 +167,18 @@ jobs:
         if: always()
         run: |
           mkdir -p release_assets
-          for f in /tmp/build.log /tmp/lunch.log /tmp/kernel_build.log /tmp/kernel_defconfig.log; do
+          for f in /tmp/build.log /tmp/lunch.log; do
             if [ -s "$f" ]; then cp "$f" release_assets/
-            else echo "(no $f produced)" > "release_assets/$(basename $f)"; fi
+            else echo "(no $f)" > "release_assets/$(basename $f)"; fi
           done
           if [ -d artifacts ]; then
             for f in artifacts/*; do
               if [ -s "$f" ]; then cp "$f" release_assets/; fi
             done
           fi
-          # Include custom kernel in release
-          [ -f kernel_custom_Image.gz ] && cp kernel_custom_Image.gz release_assets/
-          {
-            echo "Run: $GITHUB_RUN_ID"
-            echo "Date: $(date -u)"
-            echo "Collect outcome: ${{ steps.collect.outcome }}"
-            echo "Kernel: $KERNEL_REPO $KERNEL_BRANCH ($KERNEL_DEFCONFIG)"
-            echo "--- img manifest ---"
-            cat artifacts/img_manifest.txt 2>/dev/null || echo "(none)"
-            echo "--- product out listing ---"
-            cat artifacts/product_out_listing.txt 2>/dev/null || echo "(none)"
-          } > release_assets/summary.txt
+          { echo "Run: $GITHUB_RUN_ID"; echo "Date: $(date -u)";
+            echo "Patch: SelinuxInitialize skips LoadPolicy";
+            cat artifacts/img_manifest.txt 2>/dev/null || echo "(none)"; } > release_assets/summary.txt
           ls -la release_assets/
 
       - name: Upload to Release
@@ -234,12 +186,10 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release_assets/*
-          name: ${{ env.DEVICE_NAME }}-twrp-customkernel-${{ github.run_id }}
+          name: k10-twrp-selinux-patch-${{ github.run_id }}
           tag_name: twrp-${{ github.run_id }}
           body: |
-            TWRP for K10 (MT6765) — source-built with custom kernel (SELinux DEVELOP=y)
-            Kernel: ${{ env.KERNEL_REPO }} ${{ env.KERNEL_BRANCH }}
-            Target: ${{ env.BUILD_TARGET }}
-            Collect result: ${{ steps.collect.outcome }}
+            TWRP for K10 (MT6765) — source-built with SelinuxInitialize patch
+            Skip LoadPolicy to avoid MTK 4.19 kernel ebitmap_write panic
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
