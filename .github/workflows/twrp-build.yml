@@ -99,6 +99,9 @@ jobs:
               LOG(INFO) << "TWRP: SELinux init skipped (MTK 4.19 compat)";
           }'''
           d = d[:idx] + new_func + d[end:]
+          # Mark now-unused functions as __attribute__((unused)) to avoid -Werror
+          d = d.replace('bool IsEnforcing() {', '__attribute__((unused)) bool IsEnforcing() {')
+          d = d.replace('bool LoadPolicy() {', '__attribute__((unused)) bool LoadPolicy() {')
           open(f, 'w').write(d)
           print("Patched: SelinuxInitialize body replaced with early return")
           PYEOF
