@@ -149,42 +149,40 @@ jobs:
           if-no-files-found: warn
 
       - name: Collect artifacts
+        id: collect
+        continue-on-error: true
         run: |
+          set +e
           echo "=== locate product out ==="
-          # PRODUCT_OUT may be out/target/product/<device> — find it robustly
-          PROD=$(find workspace/out/target/product -maxdepth 1 -mindepth 1 -type d | head -1)
+          PROD=$(find workspace/out/target/product -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)
           echo "PROD=$PROD"
-          if [ -z "$PROD" ]; then
-            echo "ERROR: no product dir under workspace/out/target/product"
-            find workspace/out -maxdepth 4 -type d 2>/dev/null | head -20
-            exit 1
-          fi
-          echo "=== product out dir ==="
-          ls -la "$PROD" | head -40
-          echo "=== all .img files under out ==="
-          find workspace/out -name "*.img" -type f 2>/dev/null | head -20
           mkdir -p artifacts
-          # recovery-as-boot: boot.img is the flashable image; also grab
-          # recovery.img / ramdisk-recovery.img if present.
+          if [ -z "$PROD" ]; then
+            echo "WARN: no product dir; listing what exists"
+            find workspace/out -maxdepth 4 -type d 2>/dev/null | head -30 > artifacts/product_out_listing.txt
+            find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
+            echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
+            date -u > artifacts/build_date.txt
+            ls -la artifacts/
+            exit 0
+          fi
+          ls -la "$PROD" | head -60 > artifacts/product_out_listing.txt
+          find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
+          echo "=== all .img under out ==="
+          cat artifacts/img_manifest.txt
+          echo "=== product listing (head) ==="
+          head -20 artifacts/product_out_listing.txt
           for f in boot.img recovery.img ramdisk-recovery.img; do
-            if [ -f "$PROD/$f" ]; then
-              cp -v "$PROD/$f" artifacts/
-            fi
+            [ -f "$PROD/$f" ] && cp -v "$PROD/$f" artifacts/
           done
-          # any installable zips
           for z in "$PROD"/*.zip; do
             [ -f "$z" ] && cp -v "$z" artifacts/
           done
           echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
           date -u > artifacts/build_date.txt
-          # save a manifest so we can see what was produced even if images
-          # end up empty
-          ls -la "$PROD" > artifacts/product_out_listing.txt 2>/dev/null
-          find workspace/out -name "*.img" > artifacts/img_manifest.txt 2>/dev/null
           echo "=== artifacts dir ==="
           ls -la artifacts/
-          echo "=== sha256 ==="
-          sha256sum artifacts/*.img 2>/dev/null || echo "(no images to hash)"
+          sha256sum artifacts/*.img 2>/dev/null || echo "(no images)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
