@@ -1,8 +1,8 @@
-name: TWRP Build (K10) — SELinux patch
+name: TWRP Build with Xiaomi MT6765 Kernel
 
 on:
   push:
-    branches: [ main ]
+    branches: [ xiaomi-kernel ]
   workflow_dispatch:
 
 jobs:
@@ -17,6 +17,9 @@ jobs:
       DEVICE_NAME: 'k10'
       MAKEFILE_NAME: 'twrp_k10'
       BUILD_TARGET: 'bootimage'
+      KERNEL_REPO: 'https://github.com/xiaomi-mt6765/android_kernel_xiaomi_mt6765'
+      KERNEL_BRANCH: 'lineage-17.1'
+      KERNEL_DEFCONFIG: 'k65v1_64_bsp_defconfig'
     steps:
       - name: Check Out
         uses: actions/checkout@v4
@@ -37,7 +40,7 @@ jobs:
             xsltproc bc ccache lib32readline-dev lib32z1-dev liblz4-tool libncurses-dev \
             build-essential git libxml2 lzop pngcrush squashfs-tools \
             imagemagick libbz2-dev lzma ncftp libstdc++-10-dev libncurses6 \
-            python3 tar unzip zip
+            python3 tar unzip zip bison flex libssl-dev
           if ! command -v python >/dev/null; then
             sudo ln -sf /usr/bin/python3 /usr/local/bin/python
           fi
@@ -56,7 +59,50 @@ jobs:
           sudo ln -sf ~/bin/repo /usr/bin/repo
           git config --global user.name "k10-twrp-ci"
           git config --global user.email "k10-twrp-ci@users.noreply.github.com"
-          git config --global init.defaultBranch main
+
+      - name: Clone kernel source
+        run: |
+          git clone --depth=1 -b "$KERNEL_BRANCH" "$KERNEL_REPO" kernel_src
+          echo "kernel source: $(du -sh kernel_src | cut -f1)"
+          # List available defconfigs
+          ls kernel_src/arch/arm64/configs/ | grep -i "mt6765\|k65\|k62\|dandelion" || true
+
+      - name: Patch and build kernel
+        run: |
+          set -o pipefail
+          cd kernel_src
+          export ARCH=arm64
+          sudo apt install -yq gcc-aarch64-linux-gnu
+          export CROSS_COMPILE=aarch64-linux-gnu-
+          # Find the right defconfig
+          DEFCFG=$(find arch/arm64/configs/ -name "*mt6765*" -o -name "*k65*" | head -1)
+          if [ -z "$DEFCFG" ]; then
+            echo "No MT6765 defconfig found, listing all:"
+            ls arch/arm64/configs/
+            exit 1
+          fi
+          echo "Using defconfig: $DEFCFG"
+          DEFNAME=$(basename "$DEFCFG" .defconfig)
+          # Patch SELinux: enable DEVELOP mode (allows permissive)
+          sed -i 's/# CONFIG_SECURITY_SELINUX_DEVELOP is not set/CONFIG_SECURITY_SELINUX_DEVELOP=y/' "$DEFCFG" 2>/dev/null || true
+          grep -q "CONFIG_SECURITY_SELINUX_BOOTPARAM" "$DEFCFG" 2>/dev/null || echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> "$DEFCFG"
+          grep -i "SELINUX" "$DEFCFG" || echo "(no SELinux config in defconfig)"
+          # Fix non-ASCII in Kconfig files
+          find drivers/input/touchscreen -name "Kconfig" -exec sed -i 's/[^[:print:]\t]/ /g' {} \; 2>/dev/null || true
+          # Patch GCC 13 inline issues
+          find include/ kernel/sched/ -name "*.h" -exec sed -i '/^inline /s/^inline //' {} \; 2>/dev/null || true
+          # Build
+          make "$DEFNAME" 2>&1 | tee /tmp/kernel_defconfig.log
+          make KCFLAGS="-w" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
+          ls -la arch/arm64/boot/Image.gz
+          cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
+        id: kernel_build
+
+      - name: Upload kernel artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: xiaomi-kernel-${{ github.run_id }}
+          path: kernel_custom_Image.gz
 
       - name: Initialize repo workspace
         run: |
@@ -71,60 +117,14 @@ jobs:
             echo "retry $i ..."; sleep 30
           done
           test -f build/envsetup.sh
-          test -d bootable/recovery
-          test -d vendor/twrp
         working-directory: workspace
 
-      - name: Patch init to skip SELinux policy loading
-        run: |
-          # Patch system/core init/selinux.cpp: make SelinuxInitialize skip LoadPolicy
-          # This prevents ebitmap_write kernel panic on MTK 4.19 kernels where
-          # CONFIG_SECURITY_SELINUX_DEVELOP is not set (only enforcing mode).
-          SELINUX_CPP="workspace/system/core/init/selinux.cpp"
-          echo "=== before patch ==="
-          grep -n "SelinuxInitialize\|LoadPolicy" "$SELINUX_CPP" | head -10
-          python3 - <<'PYEOF'
-          f = "workspace/system/core/init/selinux.cpp"
-          d = open(f).read()
-          old = '''void SelinuxInitialize() {
-              LOG(INFO) << "Loading SELinux policy";
-              if (!LoadPolicy()) {
-                  LOG(FATAL) << "Unable to load SELinux policy";
-              }'''
-          new = '''void SelinuxInitialize() {
-              LOG(INFO) << "Loading SELinux policy";
-              // TWRP patch: skip policy loading (MTK 4.19 ebitmap_write panic workaround)
-              LOG(INFO) << "TWRP: skipping SELinux policy load (MTK 4.19 compat)";
-              return;
-              if (!LoadPolicy()) {
-                  LOG(FATAL) << "Unable to load SELinux policy";
-              }'''
-          if old in d:
-              d = d.replace(old, new)
-              open(f,'w').write(d)
-              print("PATCHED: SelinuxInitialize now skips LoadPolicy")
-          else:
-              print("WARNING: exact pattern not found, trying flexible match...")
-              import re
-              # More flexible match
-              pattern = r'(void SelinuxInitialize\(\)\s*\{\s*LOG\(INFO\) << "Loading SELinux policy";\s*)if \(!LoadPolicy\(\)\)'
-              if re.search(pattern, d):
-                  d = re.sub(pattern, r'\1return; // TWRP: skip LoadPolicy (MTK 4.19 compat)\n            if (!LoadPolicy())', d)
-                  open(f,'w').write(d)
-                  print("PATCHED (flexible match)")
-              else:
-                  print("ERROR: could not find SelinuxInitialize pattern")
-                  exit(1)
-          PYEOF
-          echo "=== after patch ==="
-          grep -n "SelinuxInitialize\|LoadPolicy\|TWRP.*skip" "$SELINUX_CPP" | head -10
-        working-directory: .
-
-      - name: Install device tree
+      - name: Install device tree with custom kernel
         run: |
           SRC=${GITHUB_WORKSPACE}/device/k10/k10
           mkdir -p workspace/device/k10
           cp -a "$SRC" workspace/device/k10/k10
+          cp ${GITHUB_WORKSPACE}/kernel_custom_Image.gz workspace/$DEVICE_PATH/prebuilt/Image.gz
           ls -la workspace/$DEVICE_PATH/prebuilt/
         working-directory: .
 
@@ -135,7 +135,6 @@ jobs:
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
           lunch $MAKEFILE_NAME-eng > /tmp/lunch.log 2>&1 || { cat /tmp/lunch.log; exit 1; }
-          echo "=== lunch done, TARGET_PRODUCT=$TARGET_PRODUCT ==="
           make $BUILD_TARGET -j$(nproc --all) 2>&1 | tee /tmp/build.log
         working-directory: workspace
 
@@ -147,19 +146,16 @@ jobs:
           PROD=$(find workspace/out/target/product -maxdepth 1 -mindepth 1 -type d 2>/dev/null | head -1)
           mkdir -p artifacts
           if [ -z "$PROD" ]; then
-            find workspace/out -maxdepth 4 -type d 2>/dev/null | head -30 > artifacts/product_out_listing.txt
-            find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
-            echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
+            find workspace/out -maxdepth 4 -type d 2>/dev/null | head > artifacts/product_out_listing.txt
+            find workspace/out -name "*.img" 2>/dev/null > artifacts/img_manifest.txt
             exit 0
           fi
-          ls -la "$PROD" | head -60 > artifacts/product_out_listing.txt
-          find workspace/out -name "*.img" -type f 2>/dev/null > artifacts/img_manifest.txt
-          cat artifacts/img_manifest.txt
+          ls -la "$PROD" > artifacts/product_out_listing.txt
+          find workspace/out -name "*.img" 2>/dev/null > artifacts/img_manifest.txt
           for f in boot.img recovery.img ramdisk-recovery.img; do
-            [ -f "$PROD/$f" ] && cp -v "$PROD/$f" artifacts/
+            [ -f "$PROD/$f" ] && cp "$PROD/$f" artifacts/
           done
           echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
-          date -u > artifacts/build_date.txt
           ls -la artifacts/
           sha256sum artifacts/*.img 2>/dev/null || echo "(no images)"
 
@@ -167,17 +163,13 @@ jobs:
         if: always()
         run: |
           mkdir -p release_assets
-          for f in /tmp/build.log /tmp/lunch.log; do
+          for f in /tmp/build.log /tmp/lunch.log /tmp/kernel_build.log /tmp/kernel_defconfig.log; do
             if [ -s "$f" ]; then cp "$f" release_assets/
             else echo "(no $f)" > "release_assets/$(basename $f)"; fi
           done
-          if [ -d artifacts ]; then
-            for f in artifacts/*; do
-              if [ -s "$f" ]; then cp "$f" release_assets/; fi
-            done
-          fi
-          { echo "Run: $GITHUB_RUN_ID"; echo "Date: $(date -u)";
-            echo "Patch: SelinuxInitialize skips LoadPolicy";
+          [ -d artifacts ] && for f in artifacts/*; do [ -s "$f" ] && cp "$f" release_assets/; done
+          [ -f kernel_custom_Image.gz ] && cp kernel_custom_Image.gz release_assets/
+          { echo "Run: $GITHUB_RUN_ID"; echo "Kernel: $KERNEL_REPO $KERNEL_BRANCH";
             cat artifacts/img_manifest.txt 2>/dev/null || echo "(none)"; } > release_assets/summary.txt
           ls -la release_assets/
 
@@ -186,10 +178,9 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: release_assets/*
-          name: k10-twrp-selinux-patch-${{ github.run_id }}
+          name: k10-twrp-xiaomi-kernel-${{ github.run_id }}
           tag_name: twrp-${{ github.run_id }}
           body: |
-            TWRP for K10 (MT6765) — source-built with SelinuxInitialize patch
-            Skip LoadPolicy to avoid MTK 4.19 kernel ebitmap_write panic
+            TWRP for K10 with Xiaomi MT6765 kernel (SELinux DEVELOP=y)
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
