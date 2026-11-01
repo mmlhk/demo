@@ -92,8 +92,8 @@ jobs:
           # Patch GCC 13 inline issues
           find include/ kernel/sched/ -name "*.h" -exec sed -i '/^inline /s/^inline //' {} \; 2>/dev/null || true
           # Build
-          make "$DEFNAME" 2>&1 | tee /tmp/kernel_defconfig.log
-          make KCFLAGS="-w" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
+          make "$DEFNAME" KCFLAGS="-w" HOSTCFLAGS="-fcommon -w" 2>&1 | tee /tmp/kernel_defconfig.log
+          make KCFLAGS="-w" HOSTCFLAGS="-fcommon -w" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
           ls -la arch/arm64/boot/Image.gz
           cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
         id: kernel_build
