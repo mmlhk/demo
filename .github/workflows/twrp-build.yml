@@ -75,49 +75,35 @@ jobs:
           test -d vendor/twrp
         working-directory: workspace
 
-      - name: Patch init to skip SELinux policy loading
+      - name: Patch init to skip SELinux initialization entirely
         run: |
-          # Patch system/core init/selinux.cpp: make SelinuxInitialize skip LoadPolicy
-          # This prevents ebitmap_write kernel panic on MTK 4.19 kernels where
-          # CONFIG_SECURITY_SELINUX_DEVELOP is not set (only enforcing mode).
           SELINUX_CPP="workspace/system/core/init/selinux.cpp"
           echo "=== before patch ==="
-          grep -n "SelinuxInitialize\|LoadPolicy" "$SELINUX_CPP" | head -10
+          grep -n "SelinuxInitialize" "$SELINUX_CPP" | head -5
           python3 - <<'PYEOF'
           f = "workspace/system/core/init/selinux.cpp"
           d = open(f).read()
-          old = '''void SelinuxInitialize() {
-              LOG(INFO) << "Loading SELinux policy";
-              if (!LoadPolicy()) {
-                  LOG(FATAL) << "Unable to load SELinux policy";
-              }'''
-          new = '''void SelinuxInitialize() {
-              LOG(INFO) << "Loading SELinux policy";
-              // TWRP patch: skip policy loading (MTK 4.19 ebitmap_write panic workaround)
-              LOG(INFO) << "TWRP: skipping SELinux policy load (MTK 4.19 compat)";
-              return;
-              if (!LoadPolicy()) {
-                  LOG(FATAL) << "Unable to load SELinux policy";
-              }'''
-          if old in d:
-              d = d.replace(old, new)
-              open(f,'w').write(d)
-              print("PATCHED: SelinuxInitialize now skips LoadPolicy")
-          else:
-              print("WARNING: exact pattern not found, trying flexible match...")
-              import re
-              # More flexible match
-              pattern = r'(void SelinuxInitialize\(\)\s*\{\s*LOG\(INFO\) << "Loading SELinux policy";\s*)if \(!LoadPolicy\(\)\)'
-              if re.search(pattern, d):
-                  d = re.sub(pattern, r'\1return; // TWRP: skip LoadPolicy (MTK 4.19 compat)\n            if (!LoadPolicy())', d)
-                  open(f,'w').write(d)
-                  print("PATCHED (flexible match)")
-              else:
-                  print("ERROR: could not find SelinuxInitialize pattern")
-                  exit(1)
+          idx = d.find('void SelinuxInitialize() {')
+          if idx < 0:
+              print("ERROR: SelinuxInitialize not found"); exit(1)
+          depth = 0; end = idx
+          for i in range(idx, len(d)):
+              if d[i] == '{': depth += 1
+              elif d[i] == '}':
+                  depth -= 1
+                  if depth == 0: end = i + 1; break
+          new_func = '''void SelinuxInitialize() {
+              // TWRP patch: completely skip SELinux initialization.
+              // MTK 4.19 kernel has CONFIG_SECURITY_SELINUX_DEVELOP not set,
+              // so security_getenforce/setenforce also fail/panic.
+              LOG(INFO) << "TWRP: SELinux init skipped (MTK 4.19 compat)";
+          }'''
+          d = d[:idx] + new_func + d[end:]
+          open(f, 'w').write(d)
+          print("Patched: SelinuxInitialize body replaced with early return")
           PYEOF
           echo "=== after patch ==="
-          grep -n "SelinuxInitialize\|LoadPolicy\|TWRP.*skip" "$SELINUX_CPP" | head -10
+          grep -n "SelinuxInitialize\|TWRP.*skip" "$SELINUX_CPP" | head -5
         working-directory: .
 
       - name: Install device tree
