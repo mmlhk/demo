@@ -91,6 +91,14 @@ jobs:
           find drivers/input/touchscreen -name "Kconfig" -exec sed -i 's/[^[:print:]\t]/ /g' {} \; 2>/dev/null || true
           # Patch GCC 13 inline issues
           find include/ kernel/sched/ -name "*.h" -exec sed -i '/^inline /s/^inline //' {} \; 2>/dev/null || true
+          # Auto-create stub headers for missing MTK BSP files
+          for h in helio-dvfsrc.h mtk_sd.h mtk_ppm_platform.h mtk_ftrace.h met_ftrace_touch.h met_ftrace_gpu.h met_ftrace_mm.h met_ftrace.h; do
+            find . -name "*.c" -o -name "*.h" | xargs grep -l "$h" 2>/dev/null | while read src; do
+              d=$(dirname "$src")
+              [ ! -f "$d/$h" ] && echo "/* auto-stub */" > "$d/$h"
+            done
+            [ ! -f "include/linux/$h" ] && echo "/* auto-stub */" > "include/linux/$h"
+          done
           # Build
           make "$DEFNAME" KCFLAGS="-w" HOSTCFLAGS="-fcommon -w" 2>&1 | tee /tmp/kernel_defconfig.log
           make KCFLAGS="-w" HOSTCFLAGS="-fcommon -w" Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
