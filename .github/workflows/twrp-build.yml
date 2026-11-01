@@ -191,17 +191,21 @@ jobs:
           path: artifacts/
 
       - name: Upload to Release
+        if: always()
         uses: softprops/action-gh-release@v2
         with:
           files: |
             artifacts/*.img
             artifacts/*.zip
             artifacts/*.txt
+            /tmp/build.log
+            /tmp/lunch.log
           name: ${{ env.DEVICE_NAME }}-twrp-${{ github.run_id }}
           tag_name: twrp-${{ github.run_id }}
           body: |
             TWRP for K10 (MT6765) — source-built, recovery-as-boot
             Manifest: ${{ env.MANIFEST_BRANCH }}
             Target: ${{ env.BUILD_TARGET }}
+            Collect result: ${{ steps.collect.outcome }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
