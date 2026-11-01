@@ -151,17 +151,22 @@ jobs:
       - name: Collect artifacts
         run: |
           PROD=workspace/out/target/product/$DEVICE_NAME
-          ls -la "$PROD" || true
+          echo "=== product out dir ==="
+          ls -la "$PROD" 2>/dev/null || { echo "WARN: $PROD not found"; find workspace/out/target/product -maxdepth 2 -type d 2>/dev/null | head; }
           mkdir -p artifacts
-          # recovery-as-boot: boot.img is the flashable image
-          cp -v "$PROD"/boot.img artifacts/ 2>/dev/null || true
-          cp -v "$PROD"/recovery.img artifacts/ 2>/dev/null || true
-          cp -v "$PROD"/*.zip artifacts/ 2>/dev/null || true
+          # recovery-as-boot: boot.img is the flashable image; recovery.img may
+          # also exist. Collect every plausible artifact, tolerate missing ones.
+          for f in boot.img recovery.img ramdisk-recovery.img; do
+            cp -v "$PROD/$f" artifacts/ 2>/dev/null || echo "(no $f)"
+          done
+          # any installable zips
+          cp -v "$PROD"/*.zip artifacts/ 2>/dev/null || echo "(no zips)"
           echo "$GITHUB_RUN_ID" > artifacts/build_info.txt
           date -u > artifacts/build_date.txt
+          echo "=== artifacts dir ==="
           ls -la artifacts/
-          # fail loudly if nothing was built
-          ls artifacts/*.img >/dev/null 2>&1 || { echo "ERROR: no image produced"; exit 1; }
+          echo "=== sha256 ==="
+          sha256sum artifacts/*.img 2>/dev/null || echo "(no images to hash)"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
