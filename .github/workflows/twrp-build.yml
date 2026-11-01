@@ -79,14 +79,14 @@ jobs:
           DEFCFG="kernel_src/arch/arm64/configs/$KERNEL_DEFCONFIG"
           echo "=== before patch ==="
           grep -i "SELINUX" "$DEFCFG" || echo "(no SELinux config)"
-          # Enable CONFIG_SECURITY_SELINUX_DEVELOP=y (allows permissive mode)
-          # and CONFIG_SECURITY_SELINUX_BOOTPARAM=y (allows selinux=0 cmdline)
           sed -i 's/# CONFIG_SECURITY_SELINUX_DEVELOP is not set/CONFIG_SECURITY_SELINUX_DEVELOP=y/' "$DEFCFG"
-          # Add BOOTPARAM if not present
           grep -q "CONFIG_SECURITY_SELINUX_BOOTPARAM" "$DEFCFG" || \
             echo "CONFIG_SECURITY_SELINUX_BOOTPARAM=y" >> "$DEFCFG"
           echo "=== after patch ==="
           grep -i "SELINUX" "$DEFCFG"
+          # Fix broken Kconfig files that break defconfig generation
+          # (goodix_berlin_driver has non-ASCII chars in Kconfig)
+          find kernel_src/drivers/input/touchscreen/mediatek -name "Kconfig" -exec sed -i 's/[^[:print:]\t]/ /g' {} \; 2>/dev/null || true
 
       - name: Build kernel
         run: |
