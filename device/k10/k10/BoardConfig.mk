@@ -109,8 +109,9 @@ TARGET_COPY_OUT_VENDOR := vendor
 # Anti-rollback hack so the build accepts the old platform security patch
 PLATFORM_SECURITY_PATCH := 2099-12-31
 VENDOR_SECURITY_PATCH := 2099-12-31
-PLATFORM_VERSION := 11
-PLATFORM_VERSION_CODENAME := REL
+# NOTE: PLATFORM_VERSION / PLATFORM_VERSION_CODENAME are readonly in the
+# AOSP R build system and must NOT be set in BoardConfig (they cause
+# "cannot assign to readonly variable" and abort the entire config load).
 
 # Recovery UI
 # Pixel format: leave unset — minui auto-detects from fb0 (stock AOSP recovery
