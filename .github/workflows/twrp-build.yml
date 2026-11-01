@@ -93,18 +93,15 @@ jobs:
           set -o pipefail
           cd kernel_src
           export ARCH=arm64
-          # GCC 13 (ubuntu-24.04) has always_inline inlining errors with 4.19.
-          # Use clang from AOSP prebuilts (already in workspace after repo sync).
-          # If workspace not synced yet, install clang from apt.
-          if [ -f /opt/hostedtoolcache/Java_Zulu_jdk/11*/x64/bin/java ]; then true; fi
-          sudo apt install -yq clang lld llvm gcc-aarch64-linux-gnu
+          sudo apt install -yq clang lld llvm
+          # Use LLVM/clang exclusively (LLVM=1 uses clang for both CC and binutils)
+          # This avoids GCC 13 always_inline incompatibility with 4.19
+          export LLVM=1
           export CC=clang
-          export CROSS_COMPILE=aarch64-linux-gnu-
-          export CROSS_COMPILE_COMPAT=aarch64-linux-gnu-
-          # Patch for clang: kernel 4.19 needs -Wno-error for some warnings
+          # Patch: -Werror causes issues with clang on 4.19
           sed -i 's/-Werror/-Wno-error/g' Makefile
           make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
-          make Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
+          make LLVM=1 Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
           ls -la arch/arm64/boot/Image.gz
           cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
         id: kernel_build
