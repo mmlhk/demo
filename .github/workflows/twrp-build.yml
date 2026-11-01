@@ -2,7 +2,7 @@ name: TWRP Build (K10) — SELinux patch
 
 on:
   push:
-    branches: [ main ]
+    branches: [ main, selinux-skip-v2 ]
   workflow_dispatch:
 
 jobs:
