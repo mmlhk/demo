@@ -93,11 +93,24 @@ jobs:
           set -o pipefail
           cd kernel_src
           export ARCH=arm64
-          sudo apt install -yq gcc-aarch64-linux-gnu
-          export CROSS_COMPILE=aarch64-linux-gnu-
+          # GCC 13 (ubuntu-24.04 default) is incompatible with kernel 4.19
+          # (always_inline errors). Install GCC 10 or use clang.
+          # Try clang from AOSP prebuilts — but easiest: install gcc-10 cross
+          sudo apt install -yq gcc-10-aarch64-linux-gnu
+          # Use gcc-10 if available, else fall back to gcc-13 with -Wno-error
+          if [ -f /usr/bin/aarch64-linux-gnu-gcc-10 ]; then
+            export CROSS_COMPILE=aarch64-linux-gnu-
+            export CC=aarch64-linux-gnu-gcc-10
+            # Create symlink so CROSS_COMPILE prefix works
+            sudo ln -sf /usr/bin/aarch64-linux-gnu-gcc-10 /usr/bin/aarch64-linux-gnu-gcc
+            sudo ln -sf /usr/bin/aarch64-linux-gnu-gcc-10 /usr/local/bin/aarch64-linux-gnu-gcc
+          else
+            export CROSS_COMPILE=aarch64-linux-gnu-
+            # Patch for GCC 13: suppress always_inline errors
+            sed -i 's/-Werror/-Wno-error/g' Makefile
+          fi
           make $KERNEL_DEFCONFIG 2>&1 | tee /tmp/kernel_defconfig.log
           make Image.gz -j$(nproc --all) 2>&1 | tee /tmp/kernel_build.log
-          # Verify output
           ls -la arch/arm64/boot/Image.gz
           cp arch/arm64/boot/Image.gz ${GITHUB_WORKSPACE}/kernel_custom_Image.gz
         id: kernel_build
