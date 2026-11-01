@@ -133,9 +133,20 @@ jobs:
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
-          lunch $MAKEFILE_NAME-eng
-          make $BUILD_TARGET -j$(nproc --all)
+          set -x
+          lunch $MAKEFILE_NAME-eng 2>&1 | tee /tmp/lunch.log
+          make $BUILD_TARGET -j$(nproc --all) 2>&1 | tee /tmp/build.log
         working-directory: workspace
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_id }}
+          path: |
+            /tmp/lunch.log
+            /tmp/build.log
+          if-no-files-found: warn
 
       - name: Collect artifacts
         run: |
