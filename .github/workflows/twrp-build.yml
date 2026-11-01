@@ -118,8 +118,11 @@ jobs:
 
       - name: Install device tree
         run: |
+          # The repo root IS the device tree container (device/k10/k10)
+          SRC=${GITHUB_WORKSPACE}/device/k10/k10
+          test -f "$SRC/AndroidProducts.mk"
           mkdir -p workspace/device/k10
-          cp -a ${GITHUB_WORKSPACE}/twrp_tree/device/k10/k10 workspace/device/k10/k10
+          cp -a "$SRC" workspace/device/k10/k10
           ls -la workspace/$DEVICE_PATH/prebuilt
           test -f workspace/$DEVICE_PATH/prebuilt/Image.gz
           test -f workspace/$DEVICE_PATH/prebuilt/dtb.img
