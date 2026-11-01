@@ -190,16 +190,43 @@ jobs:
           name: twrp-k10-${{ github.run_id }}
           path: artifacts/
 
+      - name: Prepare release assets
+        if: always()
+        run: |
+          # Ensure all release files exist and are non-empty (GitHub rejects
+          # 0-byte assets with "size must be greater than or equal to 1").
+          mkdir -p release_assets
+          # build.log and lunch.log from the Build step
+          for f in /tmp/build.log /tmp/lunch.log; do
+            if [ -s "$f" ]; then
+              cp "$f" release_assets/
+            else
+              echo "(no $f produced)" > "release_assets/$(basename $f)"
+            fi
+          done
+          # artifacts from Collect step
+          if [ -d artifacts ]; then
+            for f in artifacts/*; do
+              if [ -s "$f" ]; then cp "$f" release_assets/; fi
+            done
+          fi
+          # always have at least a summary
+          {
+            echo "Run: $GITHUB_RUN_ID"
+            echo "Date: $(date -u)"
+            echo "Collect outcome: ${{ steps.collect.outcome }}"
+            echo "--- img manifest ---"
+            cat artifacts/img_manifest.txt 2>/dev/null || echo "(none)"
+            echo "--- product out listing ---"
+            cat artifacts/product_out_listing.txt 2>/dev/null || echo "(none)"
+          } > release_assets/summary.txt
+          ls -la release_assets/
+
       - name: Upload to Release
         if: always()
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            artifacts/*.img
-            artifacts/*.zip
-            artifacts/*.txt
-            /tmp/build.log
-            /tmp/lunch.log
+          files: release_assets/*
           name: ${{ env.DEVICE_NAME }}-twrp-${{ github.run_id }}
           tag_name: twrp-${{ github.run_id }}
           body: |
