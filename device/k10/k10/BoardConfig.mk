@@ -119,7 +119,9 @@ TW_THEME := portrait_hdpi
 TW_BRIGHTNESS_PATH := "/sys/class/leds/lcd-backlight/brightness"
 TW_MAX_BRIGHTNESS := 255
 TW_DEFAULT_BRIGHTNESS := 128
-TW_NO_SCREEN_BLANK_ON_BOOT := true
+# Correct flag name in TWRP android-11 source (TW_NO_SCREEN_BLANK_ON_BOOT
+# does not exist there; X5's tree carried the typo and it silently no-ops)
+TW_NO_SCREEN_BLANK := true
 # HALL_DEV is a cover sensor that emits spurious KEY_POWER events; keep the
 # real key devices (mtk-kpd volume, mtk-pmic-keys power) for navigation.
 TW_INPUT_BLACKLIST := "HALL_DEV"
@@ -134,8 +136,6 @@ TW_INCLUDE_NTFS_3G := true
 # Toolbox instead of busybox (busybox source is not part of the minimal
 # twrp-11 manifest; toolbox is — proven on other MT6765 trees)
 TW_USE_TOOLBOX := true
-
-TW_EXCLUDE_TWRPAPP := true
 
 # Logging for diagnosis (prior binary ports died silently before opening
 # recovery.log — keep logd/logcat available in the image)
