@@ -1,0 +1,3 @@
+add_lunch_combo twrp_k10-user
+add_lunch_combo twrp_k10-userdebug
+add_lunch_combo twrp_k10-eng

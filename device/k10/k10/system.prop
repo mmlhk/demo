@@ -1,0 +1,17 @@
+# K10 device properties for TWRP recovery build
+ro.adb.secure=0
+ro.allow.mock.location=1
+ro.debuggable=1
+ro.secure=0
+# Identity (from live device)
+ro.product.device=k62v1_64_bsp_S30_254_incell_1036_dianshang
+ro.product.model=K10
+ro.product.brand=K10
+ro.product.manufacturer=K10
+ro.product.board=mt6765
+ro.board.platform=mt6765
+ro.hardware=mt6762
+ro.boot.hardware=mt6762
+# Display / theme
+ro.sf.lcd_density=260
+ro.minui.pixel_format=BGRA_8888

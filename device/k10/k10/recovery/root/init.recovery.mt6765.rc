@@ -1,0 +1,24 @@
+# K10 — MTK recovery init hooks for TWRP (twrp-11)
+# Based on the stock ramdisk's init.recovery.mt6765rc (extracted from boot_a)
+# plus the ov7 variant that was proven to enumerate USB in recovery on this
+# exact unit (adb pull verified at 4-13 MB/s).
+#
+# In recovery there is no /vendor, so USB gadget bring-up must happen here.
+on init
+    setprop sys.usb.configfs 1
+    setprop sys.usb.ffs.aio_compat 1
+    setprop sys.usb.controller musb-hdrc
+
+on fs
+    # Stock ramdisk had ro.debuggable=0 which kept adbd down;
+    # explicitly bring up adb for rescue/diagnosis.
+    setprop sys.usb.config adb
+    start adbd
+
+on post-fs
+    # Support A/B feature for emmc boot region (verbatim from stock
+    # init.recovery.mt6765.rc; helps bootctl/fastbootd find preloader slots)
+    symlink /dev/block/sda /dev/block/mmcblk0boot0
+    symlink /dev/block/sdb /dev/block/mmcblk0boot1
+    symlink /dev/block/mmcblk0boot0 /dev/block/platform/bootdevice/by-name/preloader_a
+    symlink /dev/block/mmcblk0boot1 /dev/block/platform/bootdevice/by-name/preloader_b
