@@ -130,11 +130,15 @@ jobs:
 
       - name: Build recovery
         run: |
+          set -o pipefail
           source build/envsetup.sh
           export ALLOW_MISSING_DEPENDENCIES=true
           export LC_ALL=C
-          set -x
-          lunch $MAKEFILE_NAME-eng 2>&1 | tee /tmp/lunch.log
+          # lunch MUST run in the current shell (not a pipe subshell) so its
+          # env exports (TARGET_PRODUCT etc.) survive to the make command.
+          # Redirect to log file, then make.
+          lunch $MAKEFILE_NAME-eng > /tmp/lunch.log 2>&1 || { cat /tmp/lunch.log; exit 1; }
+          echo "=== lunch done, TARGET_PRODUCT=$TARGET_PRODUCT ==="
           make $BUILD_TARGET -j$(nproc --all) 2>&1 | tee /tmp/build.log
         working-directory: workspace
 
